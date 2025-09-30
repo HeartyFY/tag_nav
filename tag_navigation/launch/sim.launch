@@ -1,0 +1,25 @@
+<launch>
+    <param name="use_sim_time" value="true"/>
+
+	<node pkg="stage_ros" type="stageros" name="stageros" args="$(find tag_navigation)/config/maze_carlike.world">
+		<remap from="base_scan" to="scan"/>
+        <!-- <remap from="image" to="usb_cam/image_raw"/> -->
+        <!-- <remap from="camera_info" to="usb_cam/camera_info"/> -->
+  	</node>
+
+    <node pkg="tf" type="static_transform_publisher" name="base_to_cam_link" args="0 0 0.4 0 0 0 base_link camera_link 100" />
+    <node pkg="tf" type="static_transform_publisher" name="cam_link_to_usb_cam" args="0.1 0 0 -1.57 0 -1.57 camera_link usb_cam 100" />
+
+    <!-- map_server node -->
+	<node name="map_server" pkg="map_server" type="map_server" args="$(find tag_navigation)/config/maps/maze.yaml" output="screen">
+        <param name="frame_id" value="map"/>
+    </node>
+    <node name="amcl" pkg="amcl" type="amcl" output="screen">
+        <rosparam file="$(find tag_navigation)/config/amcl_params.yaml" command="load" />
+        <param name="initial_pose_x" value="0.5"/>
+        <param name="initial_pose_y" value="1.0"/>
+        <param name="initial_pose_a" value="0.0"/>
+    </node>
+    <!-- rviz visualization node -->
+    <node name="rviz" pkg="rviz" type="rviz" output="screen" args="-d $(find tag_navigation)/config/tag_nav.rviz"/>
+</launch>
