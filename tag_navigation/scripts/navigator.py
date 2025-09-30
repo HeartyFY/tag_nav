@@ -20,11 +20,17 @@ class AprilTagFollower:
         self.desired_angle = rospy.get_param('~desired_angle', 0.0)  # 期望角度（弧度）
         self.control_frequency = rospy.get_param('~control_frequency', 2.0)  # 控制频率（Hz）
         self.camera_frame_id = rospy.get_param('~camera_frame_id', 'usb_cam')  # 相机坐标系
+        
+        # 状态变量
+        self.current_goal_status = None
+        self.is_goal_reached = False
+        
         # 发布器 - 发布目标位置到move_base
         self.goal_pub = rospy.Publisher('/move_base_simple/goal', PoseStamped, queue_size=10)
         
-        # 订阅器 - 订阅AprilTag检测结果
+        # 订阅器
         rospy.Subscriber('/tag_detections', AprilTagDetectionArray, self.tag_detection_callback)
+        rospy.Subscriber('/move_base/status', GoalStatusArray, self.goal_status_callback)  # 订阅导航状态
         
         # TF2相关
         self.tf_buffer = tf2_ros.Buffer()
@@ -34,10 +40,25 @@ class AprilTagFollower:
         self.current_tag = None
         self.last_detection_time = rospy.Time(0)
         self.tag_position = None 
+        
         # 控制定时器
         self.control_timer = rospy.Timer(rospy.Duration(1.0/self.control_frequency), self.control_callback)
 
         rospy.loginfo("AprilTag跟随节点已启动，寻找ID为 {} 的标签".format(self.target_tag_id))
+    
+    def goal_status_callback(self, msg):
+        """处理导航状态信息"""
+        if len(msg.status_list) > 0:
+            self.current_goal_status = msg.status_list[-1].status
+            # 检查是否到达目标
+            if self.current_goal_status == GoalStatus.SUCCEEDED:
+                self.is_goal_reached = True
+                rospy.loginfo("已到达目标点，停止发布新目标")
+            elif self.current_goal_status in [GoalStatus.ACTIVE, GoalStatus.PENDING]:
+                self.is_goal_reached = False
+        else:
+            self.current_goal_status = None
+            self.is_goal_reached = False
     
     def tag_detection_callback(self, msg):
         """处理AprilTag检测结果"""
@@ -106,6 +127,10 @@ class AprilTagFollower:
     
     def control_callback(self, event):
         """计算并发布目标位置"""
+        # 如果已经到达目标点，则停止发布新目标
+        if self.is_goal_reached:
+            return
+            
         if self.current_tag is None:
             rospy.logdebug_throttle(5.0, "未检测到目标标签")
             return
@@ -139,16 +164,10 @@ class AprilTagFollower:
             adjusted_pitch_cam = abs(pitch_cam)
             print(roll_cam, pitch_cam, yaw_cam)
 
-            # adjusted_yaw = (math.pi / 2) - abs(yaw)
-            # 计算需要调整的偏移距离
-            # delta_x = self.tag_position.x * math.cos(adjusted_pitch_cam) + self.tag_position.z * math.sin(adjusted_pitch_cam)
-            # delta_y = self.tag_position.z * math.sin(adjusted_pitch_cam) - self.tag_position.x * math.cos(adjusted_pitch_cam)    
-
             # 目标位置 - 在标签前方desired_distance处
             goal_pose.pose.position.x = cam_pose_map.position.x + self.tag_position.x - self.desired_distance * math.cos(adjusted_pitch_cam)
             goal_pose.pose.position.y = cam_pose_map.position.y + self.tag_position.z - self.desired_distance * math.sin(adjusted_pitch_cam)
             goal_pose.pose.position.z = 0.0
-            # print(goal_pose.pose.position)
 
             # 设置朝向 - 面向标签
             angle_to_tag = math.atan2(
@@ -156,12 +175,10 @@ class AprilTagFollower:
                 cam_pose_map.position.x - goal_pose.pose.position.x
             )
             print(angle_to_tag)
-            #debug
-            # goal_pose.pose.position.x = goal_pose.pose.position.x + abs(goal_pose.pose.position.x - tag_pose_map.position.x) * 3
-            # goal_pose.pose.position.y = goal_pose.pose.position.y + abs(goal_pose.pose.position.y - tag_pose_map.position.y) * 3
 
             q = quaternion_from_euler(0, 0, angle_to_tag)
             goal_pose.pose.orientation = Quaternion(*q)
+            
             # 发布目标位置
             self.goal_pub.publish(goal_pose)
             rospy.loginfo("发布目标位置: x={:.2f}, y={:.2f}, theta={:.2f}".format(
@@ -178,7 +195,6 @@ class AprilTagFollower:
 
 if __name__ == '__main__':
     try:
-
         follower = AprilTagFollower()
         follower.run()
     except rospy.ROSInterruptException:
